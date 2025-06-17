@@ -12,8 +12,8 @@ jobs:
   train:
     runs-on: ubuntu-latest
     env:
-      MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
-      MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+      MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TOKENS }}
+      MLFLOW_TRACKING_PASSWORD: ""
 
     steps:
       - name: Checkout code
@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas numpy matplotlib seaborn scikit-learn mlflow joblib
+          pip install pandas numpy matplotlib seaborn scikit-learn mlflow==2.7.0 joblib
 
       - name: Set MLflow Tracking URI
         run: echo "MLFLOW_TRACKING_URI=https://dagshub.com/hara29/bank-attrition-modelling.mlflow" >> $GITHUB_ENV
@@ -48,7 +48,7 @@ jobs:
           exp = client.get_experiment_by_name('RandomForest_ManualLogging')
           run = client.search_runs(experiment_ids=[exp.experiment_id], order_by=['start_time DESC'])[0]
           print(run.info.run_id)
-                    ")" >> $GITHUB_OUTPUT
+          )" >> $GITHUB_OUTPUT
 
       - name: Download model artifact from DagsHub
         run: |
@@ -76,4 +76,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: mlflow-model
-          path: mlruns/0/${{ steps.get_run_id.outputs.run_id }}/artifacts/model/
+          path: mlruns/0/${{ steps.get-run.outputs.run_id }}/artifacts/model/
