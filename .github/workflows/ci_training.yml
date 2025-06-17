@@ -1,79 +1,81 @@
 name: CI MLflow Training
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  push:          { branches: [main] }
+  pull_request:  { branches: [main] }
 
 jobs:
   train:
     runs-on: ubuntu-latest
+
+    # ====== TOKEN & VARIABEL LINGKUNGAN ======
     env:
-      MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
-      MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+      # Token DagsHub = username, password wajib kosong
+      MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_TOKEN }}
+      MLFLOW_TRACKING_PASSWORD: ""
+      # Nama image Docker yang diinginkan
+      DOCKER_IMAGE_NAME: bank-mlflow
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      - name: Set up Python 3.12.7
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.12.7'
+    - name: Set up Python 3.12.7
+      uses: actions/setup-python@v4
+      with: { python-version: '3.12.7' }
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pandas numpy matplotlib seaborn scikit-learn mlflow joblib
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # pin MLflow & pakai wheel PyArrow agar tidak compile C++
+        pip install \
+          pandas numpy matplotlib seaborn scikit-learn joblib \
+          mlflow==2.7.0 \
+          pyarrow==15.0.2 --only-binary :all:
 
-      - name: Set MLflow Tracking URI
-        run: echo "MLFLOW_TRACKING_URI=https://dagshub.com/hara29/bank-attrition-modelling.mlflow" >> $GITHUB_ENV
+    - name: Set MLflow Tracking URI
+      run: echo "MLFLOW_TRACKING_URI=https://dagshub.com/hara29/bank-attrition-modelling.mlflow" >> $GITHUB_ENV
 
-      - name: Run MLflow Project
-        shell: bash -l {0}
-        run: |
-          mlflow run MLProject --experiment-name "RandomForest_ManualLogging" --env-manager=local
+    - name: Run MLflow Project
+      shell: bash -l {0}
+      run: mlflow run MLProject --experiment-name "RandomForest_ManualLogging" --env-manager=local
 
-      - name: Get latest run_id from DagsHub
-        id: get-run
-        run: |
-          echo "Fetching latest run ID..."
-          echo "run_id=$(python -c "
-          import mlflow
-          mlflow.set_tracking_uri('https://dagshub.com/hara29/bank-attrition-modelling.mlflow')
-          client = mlflow.tracking.MlflowClient()
-          exp = client.get_experiment_by_name('RandomForest_ManualLogging')
-          run = client.search_runs(experiment_ids=[exp.experiment_id], order_by=['start_time DESC'])[0]
-          print(run.info.run_id)
-                    ")" >> $GITHUB_OUTPUT
+    - name: Get latest run_id from DagsHub
+      id: get-run
+      run: |
+        echo "Fetching latest run ID..."
+        echo "run_id=$(python - <<'PY'
+        import mlflow, os, json
+        mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
+        client = mlflow.tracking.MlflowClient()
+        exp = client.get_experiment_by_name("RandomForest_ManualLogging")
+        run = client.search_runs([exp.experiment_id], order_by=["start_time DESC"])[0]
+        print(run.info.run_id)
+        PY
+        )" >> $GITHUB_OUTPUT
 
-      - name: Download model artifact from DagsHub
-        run: |
-          mlflow artifacts download \
-            -u "runs:/${{ steps.get-run.outputs.run_id }}/model" \
-            -d model_dir
+    - name: Download model artifact
+      run: |
+        mlflow artifacts download \
+          -u "runs:/${{ steps.get-run.outputs.run_id }}/model" \
+          -d model_dir
 
-      - name: Build Docker Image 
-        run: |
-          mlflow models build-docker -m model_dir -n ${{ secrets.DOCKER_IMAGE_NAME }}
+    - name: Build Docker image
+      run: mlflow models build-docker -m model_dir -n $DOCKER_IMAGE_NAME
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+    - name: Docker Hub login
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Tag Docker Image
-        run: docker tag ${{ secrets.DOCKER_IMAGE_NAME }} ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}:latest
+    - name: Tag & push image
+      run: |
+        docker tag $DOCKER_IMAGE_NAME ${{ secrets.DOCKER_USERNAME }}/$DOCKER_IMAGE_NAME:latest
+        docker push            ${{ secrets.DOCKER_USERNAME }}/$DOCKER_IMAGE_NAME:latest
 
-      - name: Push Docker Image
-        run: docker push ${{ secrets.DOCKER_USERNAME }}/${{ secrets.DOCKER_IMAGE_NAME }}:latest
-
-      - name: Upload model artifacts to GitHub
-        uses: actions/upload-artifact@v4
-        with:
-          name: mlflow-model
-          path: mlruns/0/${{ steps.get_run_id.outputs.run_id }}/artifacts/model/
+    - name: Upload model artifacts to GitHub
+      uses: actions/upload-artifact@v4
+      with:
+        name: mlflow-model
+        path: model_dir
